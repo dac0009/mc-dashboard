@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Avenir Next', 'Helvetica Neue', sans-serif;
+    background: #1a1a2e;
+    color: white;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    overflow: hidden;
+  }
+  .container {
+    text-align: center;
+    padding: 20px;
+    width: 100%;
+  }
+  .date {
+    font-size: 2.2em;
+    font-weight: 700;
+    color: #4fc3f7;
+    margin-bottom: 8px;
+  }
+  .label {
+    font-size: 0.9em;
+    color: #aaa;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 15px;
+  }
+  .stats {
+    display: flex;
+    justify-content: center;
+    gap: 30px;
+    margin-top: 15px;
+  }
+  .stat {
+    text-align: center;
+  }
+  .stat-val {
+    font-size: 1.6em;
+    font-weight: 700;
+  }
+  .stat-label {
+    font-size: 0.7em;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .pace { color: #81c784; }
+  .remaining { color: #ffb74d; }
+  .days-left { color: #4fc3f7; }
+  .note {
+    font-size: 0.65em;
+    color: #555;
+    margin-top: 15px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="label">Estimated Completion</div>
+  <div class="date" id="est-date">Calculating...</div>
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-val pace" id="pace">-</div>
+      <div class="stat-label">per day</div>
+    </div>
+    <div class="stat">
+      <div class="stat-val remaining" id="remaining">-</div>
+      <div class="stat-label">remaining</div>
+    </div>
+    <div class="stat">
+      <div class="stat-val days-left" id="days-left">-</div>
+      <div class="stat-label">days left</div>
+    </div>
+  </div>
+  <div class="note" id="note"></div>
+</div>
+<script>
+const SVC = 'https://services2.arcgis.com/VhIw2Us69kT1MDLQ/arcgis/rest/services/MC_Stormwater_Inventory_2026/FeatureServer/0';
+
+async function query(where, stats) {
+  const params = new URLSearchParams({
+    where: where,
+    outStatistics: JSON.stringify(stats),
+    f: 'json'
+  });
+  const r = await fetch(SVC + '/query?' + params);
+  const d = await r.json();
+  return d.features ? d.features[0].attributes : null;
+}
+
+async function update() {
+  try {
+    // total and complete counts
+    const total = await query('1=1', [{ statisticType: 'count', onStatisticField: 'OBJECTID', outStatisticFieldName: 'n' }]);
+    const complete = await query("FIELD_STATUS = 'COMPLETE'", [{ statisticType: 'count', onStatisticField: 'OBJECTID', outStatisticFieldName: 'n' }]);
+    const decomm = await query("FIELD_STATUS = 'DECOMM'", [{ statisticType: 'count', onStatisticField: 'OBJECTID', outStatisticFieldName: 'n' }]);
+
+    // first and last edit dates on completed points
+    const dates = await query("FIELD_STATUS = 'COMPLETE'", [
+      { statisticType: 'min', onStatisticField: 'EditDate', outStatisticFieldName: 'first_edit' },
+      { statisticType: 'max', onStatisticField: 'EditDate', outStatisticFieldName: 'last_edit' }
+    ]);
+
+    const nTotal = total.n;
+    const nComplete = complete.n;
+    const nDecomm = decomm ? decomm.n : 0;
+    const nRemaining = nTotal - nComplete - nDecomm;
+
+    document.getElementById('remaining').textContent = nRemaining.toLocaleString();
+
+    if (!dates || !dates.first_edit || !dates.last_edit || nComplete < 2) {
+      document.getElementById('est-date').textContent = 'Not enough data yet';
+      document.getElementById('note').textContent = 'Need more completed points to estimate';
+      return;
+    }
+
+    const firstEdit = new Date(dates.first_edit);
+    const lastEdit = new Date(dates.last_edit);
+    const daysWorked = Math.max(1, (lastEdit - firstEdit) / (1000 * 60 * 60 * 24));
+    const pace = nComplete / daysWorked;
+    const daysLeft = Math.ceil(nRemaining / pace);
+
+    const estDate = new Date();
+    estDate.setDate(estDate.getDate() + daysLeft);
+
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    document.getElementById('est-date').textContent =
+      months[estDate.getMonth()] + ' ' + estDate.getDate() + ', ' + estDate.getFullYear();
+    document.getElementById('pace').textContent = Math.round(pace);
+    document.getElementById('days-left').textContent = daysLeft;
+    document.getElementById('note').textContent =
+      'Based on ' + nComplete + ' completed in ' + Math.round(daysWorked) + ' calendar days';
+
+  } catch (e) {
+    document.getElementById('est-date').textContent = 'Error loading data';
+    document.getElementById('note').textContent = e.message;
+  }
+}
+
+update();
+setInterval(update, 300000); // refresh every 5 min
+</script>
+</body>
+</html>
